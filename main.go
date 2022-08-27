@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"os"
 	"strings"
 	"time"
 
@@ -18,18 +19,37 @@ import (
 	"github.com/progrium/qmux/golang/session"
 )
 
+func getentOrDefault(key string, defaultVal string) string {
+	if val, ok := os.LookupEnv(key); ok {
+		return val
+	}
+	return defaultVal
+}
+
 func main() {
-	var port = flag.String("p", "9999", "server port to use")
-	var host = flag.String("h", "vcap.me", "server hostname to use")
-	var addr = flag.String("b", "127.0.0.1", "ip to bind [server only]")
+	var port = flag.String("p", getentOrDefault("PORT", "9999"), "server port to use")
+	var host = flag.String("h", getentOrDefault("HOST", "vcap.me"), "server hostname to use")
+	var addr = flag.String("b", getentOrDefault("BIND", "127.0.0.1"), "ip to bind [server only]")
+	var cdir = flag.String("d", getentOrDefault("DIR", "/tmp"), "clinet side www dir")
 	flag.Parse()
 
 	// client usage: groktunnel [-h=<server hostname>] <local port>
 	if flag.Arg(0) != "" {
+		if *cdir != "" {
+			fmt.Printf("[CLIENT] serving dir: %s on port: %s\n", *cdir, flag.Arg(0))
+			go func() {
+				log.Fatal(http.ListenAndServe(":"+flag.Arg(0), http.FileServer(http.Dir(*cdir))))
+			}()
+		}
+
 		conn, err := net.Dial("tcp", net.JoinHostPort(*host, *port))
 		fatal(err)
 		client := httputil.NewClientConn(conn, bufio.NewReader(conn))
 		req, err := http.NewRequest("GET", "/", nil)
+
+		fmt.Println("Asking for VHOST:", flag.Arg(1))
+		req.Header.Add("VHOST", flag.Arg(1))
+
 		req.Host = net.JoinHostPort(*host, *port)
 		fatal(err)
 		client.Write(req)
@@ -72,7 +92,14 @@ func serve(vmux *vhost.HTTPMuxer, host, port string) {
 	ml, err := vmux.Listen(net.JoinHostPort(host, port))
 	fatal(err)
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		publicHost := strings.TrimSuffix(net.JoinHostPort(newSubdomain()+host, port), ":80")
+		subdomain := r.Header.Get("VHOST")
+		if subdomain == "" {
+			subdomain = newSubdomain()
+		} else {
+			subdomain = subdomain + "."
+		}
+		log.Println("subdomain:", subdomain)
+		publicHost := strings.TrimSuffix(net.JoinHostPort(subdomain+host, port), ":80")
 		pl, err := vmux.Listen(publicHost)
 		fatal(err)
 		w.Header().Add("X-Public-Host", publicHost)
