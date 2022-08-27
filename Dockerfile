@@ -7,5 +7,8 @@ RUN go build .
 
 FROM alpine:3.16
 COPY --from=build /app/groktunnel /
-EXPOSE 9999
+ENV HOST=vcap.me
+ENV BIND=0.0.0.0
+ENV PORT=8888
+EXPOSE 8888
 CMD [ "/groktunnel" ]
